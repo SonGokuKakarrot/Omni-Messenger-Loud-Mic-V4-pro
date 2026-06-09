@@ -29,7 +29,7 @@
     reverbWet: 0.6,
     keepAlive: true,
     keepAliveGain: 0.003,
-    senderRefreshMs: 5
+    senderRefreshMs: 500
   };
   const MSG_CFG = 'MIC_MAXIMIZER_CONFIG';
   let hookReady = false;
