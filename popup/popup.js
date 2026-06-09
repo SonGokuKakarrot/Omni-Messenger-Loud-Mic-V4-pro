@@ -20,9 +20,9 @@ const DEFAULTS = {
   reverbEnabled: true,
   reverbDelay: 0.045,
   reverbFeedback: 0.35,
-  reverbWet: 0.18,
+  reverbWet: 0.6,
   keepAlive: true,
-  keepAliveGain: 0.00035,
+  keepAliveGain: 0.003,
   senderRefreshMs: 500
 };
 const PRESETS = {
@@ -87,10 +87,12 @@ function sendMessage(message) {
   });
 }
 
-function numberText(value) {
+function numberText(value, id = '') {
   const n = Number(value);
   if (!Number.isFinite(n)) return String(value);
-  if (Math.abs(n) < 0.01 && n !== 0) return n.toExponential(2);
+  if (id === 'reverbWet') return n.toFixed(2);
+  if (id === 'keepAliveGain') return n.toFixed(5);
+  if (Math.abs(n) < 0.01 && n !== 0) return n.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
   if (Math.abs(n) < 10 && !Number.isInteger(n)) return n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
   return String(n);
 }
@@ -99,7 +101,7 @@ function updateLabels() {
   ids.forEach((id) => {
     const el = document.getElementById(id);
     const label = document.getElementById(`${id}Val`);
-    if (label && el?.type !== 'checkbox') label.textContent = numberText(el.value);
+    if (label && el?.type !== 'checkbox') label.textContent = numberText(el.value, id);
   });
 }
 
