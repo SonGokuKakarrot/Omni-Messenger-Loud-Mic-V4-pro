@@ -1,7 +1,7 @@
 const EXT = globalThis.browser ?? globalThis.chrome;
 const HAS_PROMISE_API = typeof globalThis.browser !== 'undefined' && EXT === globalThis.browser;
 const DEFAULTS = {
-  profileVersion: 5,
+  profileVersion: 6,
   enabled: true,
   gainDb: 106.0206,
   loudness: 1.0,
@@ -20,33 +20,64 @@ const DEFAULTS = {
   reverbEnabled: true,
   reverbDelay: 0.045,
   reverbFeedback: 0.35,
-  reverbWet: 0.6,
+  reverbWet: 0.18,
   keepAlive: true,
-  keepAliveGain: 0.003,
-  senderRefreshMs: 500
+  keepAliveGain: 0.0012,
+  senderRefreshMs: 250
 };
 const PRESETS = {
   royal: {
-    ...DEFAULTS,
-    gainDb: 30,
-    loudness: 8,
-    maxBoost: 200000,
-    drive: 0.35,
-    thresholdDb: -42,
-    ratio: 14,
+    profileVersion: 6,
+    enabled: true,
+    gainDb: 24,
+    loudness: 4,
+    maxBoost: 2000,
+    drive: 0.28,
+    thresholdDb: -38,
+    ratio: 12,
     limiterDb: -2,
-    presenceDb: 9,
-    lowShelfDb: 5,
-    highShelfDb: 7,
+    presenceDb: 8,
+    lowShelfDb: 4,
+    highShelfDb: 6,
+    sustain: true,
     sustainTargetDb: -8,
-    sustainMaxGain: 24,
-    reverbEnabled: false,
+    sustainMaxGain: 12,
+    forceRawMic: true,
+    reverbEnabled: true,
+    reverbDelay: 0.035,
+    reverbFeedback: 0.18,
+    reverbWet: 0.08,
+    keepAlive: true,
     keepAliveGain: 0.0002,
     senderRefreshMs: 750
   },
-  lord: { ...DEFAULTS }
+  lord: {
+    profileVersion: 6,
+    enabled: true,
+    gainDb: 106.0206,
+    loudness: 1,
+    maxBoost: 200000,
+    drive: 1.2,
+    thresholdDb: -60,
+    ratio: 20,
+    limiterDb: -0.1,
+    presenceDb: 20,
+    lowShelfDb: 14,
+    highShelfDb: 16,
+    sustain: true,
+    sustainTargetDb: 5,
+    sustainMaxGain: 120,
+    forceRawMic: true,
+    reverbEnabled: true,
+    reverbDelay: 0.045,
+    reverbFeedback: 0.35,
+    reverbWet: 0.18,
+    keepAlive: true,
+    keepAliveGain: 0.0012,
+    senderRefreshMs: 250
+  }
 };
-const ids = Object.keys(DEFAULTS);
+const ids = Object.keys(DEFAULTS).filter((id) => id !== 'profileVersion');
 
 function storageGet(key) {
   if (HAS_PROMISE_API) return EXT.storage.local.get(key);
@@ -87,21 +118,24 @@ function sendMessage(message) {
   });
 }
 
-function numberText(value, id = '') {
+function numberText(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return String(value);
-  if (id === 'reverbWet') return n.toFixed(2);
-  if (id === 'keepAliveGain') return n.toFixed(5);
-  if (Math.abs(n) < 0.01 && n !== 0) return n.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
-  if (Math.abs(n) < 10 && !Number.isInteger(n)) return n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
-  return String(n);
+  if (Math.abs(n) > 0 && Math.abs(n) < 0.01) return n.toFixed(5);
+  if (Math.abs(n) < 1 && !Number.isInteger(n)) return n.toFixed(2);
+  return Math.abs(n) < 10 && !Number.isInteger(n) ? n.toFixed(1) : String(Math.round(n));
+}
+
+function multiplierFromGainDb(gainDb) {
+  return Math.round(Math.pow(10, Number(gainDb) / 20));
 }
 
 function updateLabels() {
   ids.forEach((id) => {
     const el = document.getElementById(id);
     const label = document.getElementById(`${id}Val`);
-    if (label && el?.type !== 'checkbox') label.textContent = numberText(el.value, id);
+    if (!label || el?.type === 'checkbox') return;
+    label.textContent = id === 'gainDb' ? `${numberText(el.value)} dB / ${multiplierFromGainDb(el.value)}x` : numberText(el.value);
   });
 }
 
@@ -175,10 +209,10 @@ async function refreshHookStatus() {
     const status = await sendMessage({ type: 'MICMAX_STATUS_REQUEST' });
     const ageMs = status?.lastHeartbeat ? Date.now() - status.lastHeartbeat : Infinity;
     if (status?.ok && ageMs < 12000) {
-      el.textContent = 'Hook status: ACTIVE on Instagram Web';
+      el.textContent = 'Hook status: ACTIVE on Facebook/Messenger';
       el.className = 'status ok';
     } else {
-      el.textContent = 'Hook status: waiting — open or reload Instagram Web';
+      el.textContent = 'Hook status: waiting — open or reload Facebook/Messenger Web';
       el.className = 'status warn';
     }
   } catch (_) {
