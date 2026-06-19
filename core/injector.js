@@ -2,9 +2,9 @@
   if (window.__micMaxInjectorReady) return;
   window.__micMaxInjectorReady = true;
 
-  // Instagram-focused V4 Pro profile with aggressive but clamped Web Audio controls.
+  // Omni Messenger Lord V4 extreme 200000x profile, with clamps to keep controls recoverable.
   const DEFAULTS = {
-    profileVersion: 5,
+    profileVersion: 6,
     enabled: true,
     gainDb: 106.0206,
     thresholdDb: -60,
@@ -26,10 +26,10 @@
     reverbEnabled: true,
     reverbDelay: 0.045,
     reverbFeedback: 0.35,
-    reverbWet: 0.6,
+    reverbWet: 0.18,
     keepAlive: true,
-    keepAliveGain: 0.003,
-    senderRefreshMs: 500
+    keepAliveGain: 0.0012,
+    senderRefreshMs: 250
   };
   const MSG_CFG = 'MIC_MAXIMIZER_CONFIG';
   const AUDIO_SEND_MAX_BITRATE = 512000;
@@ -82,7 +82,7 @@
     merged.reverbWet = clamp(merged.reverbWet, 0, 0.6);
     merged.keepAlive = Boolean(merged.keepAlive);
     merged.keepAliveGain = clamp(merged.keepAliveGain, 0, 0.003);
-    merged.senderRefreshMs = clamp(merged.senderRefreshMs, 250, 1500);
+    merged.senderRefreshMs = clamp(merged.senderRefreshMs, 150, 1500);
     return merged;
   }
 
@@ -123,9 +123,6 @@
       loudness: 1,
       gainDb: 0,
       drive: 0,
-      sustain: false,
-      reverbEnabled: false,
-      keepAlive: false,
       limiterDb: -0.5
     };
     const { ctx, nodes } = pipeline;
@@ -162,7 +159,6 @@
     for (const pipeline of state.pipelines) resumePipeline(pipeline);
   }
 
-
   function rmsDbFromAnalyser(analyser, buffer) {
     analyser.getByteTimeDomainData(buffer);
     let sum = 0;
@@ -188,8 +184,9 @@
       }
       resumePipeline(pipeline);
       const db = rmsDbFromAnalyser(nodes.meter, buffer);
-      if (db < c.sustainTargetDb) {
-        const lift = 1 + Math.min(1.2, Math.max(0.02, (c.sustainTargetDb - db) * 0.035));
+      const target = c.sustainTargetDb;
+      if (db < target) {
+        const lift = 1 + Math.min(1.2, Math.max(0.02, (target - db) * 0.035));
         currentGain = Math.min(c.sustainMaxGain, currentGain * lift);
       } else {
         currentGain = Math.max(1, currentGain * 0.82);
@@ -212,7 +209,9 @@
     const length = Math.max(1, Math.floor(ctx.sampleRate * 2));
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
-    for (let i = 0; i < length; i += 1) data[i] = (Math.random() * 2 - 1) * 0.35;
+    for (let i = 0; i < length; i += 1) {
+      data[i] = (Math.random() * 2 - 1) * 0.35;
+    }
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
@@ -222,8 +221,8 @@
   function build(stream, inputConfig) {
     const ctx = createAudioContext();
     if (!ctx || !stream.getAudioTracks().length) return stream;
-
     stream.getAudioTracks().forEach(enforceRawMicTrack);
+
     const source = ctx.createMediaStreamSource(stream);
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
@@ -257,6 +256,7 @@
     saturator.oversample = '4x';
     const sustain = ctx.createGain();
     sustain.gain.value = 1;
+
     const reverbDelay = ctx.createDelay(0.5);
     const reverbFeedback = ctx.createGain();
     const reverbWet = ctx.createGain();
@@ -269,6 +269,7 @@
     limiter.ratio.value = 20;
     limiter.attack.value = 0.0001;
     limiter.release.value = 0.01;
+
     const meter = ctx.createAnalyser();
     meter.fftSize = 1024;
     meter.smoothingTimeConstant = 0.18;
@@ -296,7 +297,12 @@
     meter.connect(dst);
     keepAliveSource.start(0);
 
-    const pipeline = { ctx, nodes: { low, pres, high, comp1, loudness, gain, saturator, sustain, reverbDelay, reverbFeedback, reverbWet, keepAliveGain, limiter, meter }, keepAliveSource, sustainTimer: null };
+    const pipeline = {
+      ctx,
+      nodes: { low, pres, high, comp1, loudness, gain, saturator, sustain, reverbDelay, reverbFeedback, reverbWet, keepAliveGain, limiter, meter },
+      keepAliveSource,
+      sustainTimer: null
+    };
     applyPipeline(pipeline, inputConfig);
     state.pipelines.add(pipeline);
     startSustainController(pipeline);
@@ -389,7 +395,9 @@
     if (!proto || proto.__micMaxTrackPatched || typeof proto.applyConstraints !== 'function') return;
     state.origApplyConstraints = proto.applyConstraints;
     proto.applyConstraints = function applyConstraints(constraints = {}) {
-      const next = cfg().enabled && cfg().forceRawMic && this.kind === 'audio' ? rawMicAudioConstraints(constraints) : constraints;
+      const next = cfg().enabled && cfg().forceRawMic && this.kind === 'audio'
+        ? rawMicAudioConstraints(constraints)
+        : constraints;
       return state.origApplyConstraints.call(this, next);
     };
     proto.__micMaxTrackPatched = true;
@@ -488,6 +496,7 @@
     return forSender ? cloneForSender(processedTrack) : processedTrack;
   }
 
+
   function enhanceAudioSdp(sdp) {
     if (typeof sdp !== 'string' || !sdp.includes('m=audio')) return sdp;
     let next = sdp;
@@ -505,8 +514,11 @@
 
   function cloneDescriptionWithSdp(desc, sdp) {
     if (!desc || typeof desc !== 'object' || !sdp || sdp === desc.sdp) return desc;
-    try { return new RTCSessionDescription({ type: desc.type, sdp }); }
-    catch (_) { try { return { ...desc, sdp }; } catch (__) { return desc; } }
+    try {
+      return new RTCSessionDescription({ type: desc.type, sdp });
+    } catch (_) {
+      try { return { ...desc, sdp }; } catch (_) { return desc; }
+    }
   }
 
   function tuneAudioSender(sender) {
@@ -540,11 +552,15 @@
     if (!sender) return null;
     let record = state.senderBySender.get(sender);
     if (!record) {
-      record = { sender, track: null, pc: null };
+      record = { sender, track: null, pc: null, kind: null };
       state.senderBySender.set(sender, record);
       state.senderRecords.add(record);
     }
-    if (track) record.track = track;
+    if (track) {
+      record.track = track;
+      record.kind = track.kind;
+    }
+    if (!record.kind && sender.track?.kind) record.kind = sender.track.kind;
     if (pc) record.pc = pc;
     return record;
   }
@@ -630,13 +646,27 @@
     if (!cfg().enabled) return;
     resumeAllPipelines();
     for (const pc of [...state.peerConnections]) {
-      if (typeof pc.getSenders !== 'function') continue;
-      try {
-        for (const sender of pc.getSenders()) {
-          const track = sender?.track;
-          if (track?.kind === 'audio') rememberSender(sender, track);
-        }
-      } catch (_) {}
+      if (typeof pc.getSenders === 'function') {
+        try {
+          for (const sender of pc.getSenders()) {
+            const track = sender?.track;
+            if (track?.kind === 'audio') rememberSender(sender, track, pc);
+          }
+        } catch (_) {}
+      }
+      if (typeof pc.getTransceivers === 'function') {
+        try {
+          for (const transceiver of pc.getTransceivers()) {
+            const sender = transceiver?.sender;
+            const receiverTrack = transceiver?.receiver?.track;
+            const midLooksAudio = String(transceiver?.mid || '').toLowerCase().includes('audio');
+            if (sender && (sender.track?.kind === 'audio' || receiverTrack?.kind === 'audio' || midLooksAudio)) {
+              const record = rememberSender(sender, sender.track || null, pc);
+              if (record) record.kind = 'audio';
+            }
+          }
+        } catch (_) {}
+      }
     }
 
     for (const record of [...state.senderRecords]) {
@@ -646,8 +676,9 @@
       }
       const sender = record.sender;
       const track = sender?.track || record.track;
-      if (!sender || !track || track.kind !== 'audio') continue;
-      if (trackNeedsRefresh(track)) queueSenderRefresh(sender, track);
+      const isAudioRecord = track?.kind === 'audio' || record.kind === 'audio';
+      if (!sender || !isAudioRecord) continue;
+      if (!track || trackNeedsRefresh(track)) queueSenderRefresh(sender, track);
       else {
         tuneAudioSender(sender);
         watchSenderTrack(sender, track);
@@ -677,6 +708,18 @@
         };
       }
 
+      const originalAddStream = PC.prototype.addStream;
+      if (typeof originalAddStream === 'function') {
+        PC.prototype.addStream = function addStream(stream) {
+          rememberPeerConnection(this);
+          if (cfg().enabled && stream?.getAudioTracks?.().length) {
+            const processedStream = build(stream, state.config);
+            return originalAddStream.call(this, processedStream);
+          }
+          return originalAddStream.call(this, stream);
+        };
+      }
+
       const originalAddTransceiver = PC.prototype.addTransceiver;
       if (typeof originalAddTransceiver === 'function') {
         PC.prototype.addTransceiver = function addTransceiver(trackOrKind, init = undefined) {
@@ -692,7 +735,14 @@
             if (typeof transceiver?.sender?.replaceTrack === 'function') watchSenderTrack(transceiver.sender, processedTrack);
             return transceiver;
           }
-          return originalAddTransceiver.call(this, trackOrKind, init);
+          const transceiver = originalAddTransceiver.call(this, trackOrKind, init);
+          if (cfg().enabled && trackOrKind === 'audio') {
+            const record = rememberSender(transceiver?.sender, transceiver?.sender?.track || null, this);
+            if (record) record.kind = 'audio';
+            tuneAudioSender(transceiver?.sender);
+            setTimeout(() => queueSenderRefresh(transceiver?.sender, transceiver?.sender?.track || null), 0);
+          }
+          return transceiver;
         };
       }
       const originalCreateOffer = PC.prototype.createOffer;
@@ -715,7 +765,8 @@
       if (typeof originalSetLocalDescription === 'function') {
         PC.prototype.setLocalDescription = function setLocalDescription(desc) {
           rememberPeerConnection(this);
-          return originalSetLocalDescription.call(this, cloneDescriptionWithSdp(desc, enhanceAudioSdp(desc?.sdp)));
+          const patched = cloneDescriptionWithSdp(desc, enhanceAudioSdp(desc?.sdp));
+          return originalSetLocalDescription.call(this, patched);
         };
       }
 
@@ -723,11 +774,13 @@
       if (typeof originalSetRemoteDescription === 'function') {
         PC.prototype.setRemoteDescription = function setRemoteDescription(desc) {
           rememberPeerConnection(this);
-          const result = originalSetRemoteDescription.call(this, cloneDescriptionWithSdp(desc, enhanceAudioSdp(desc?.sdp)));
+          const patched = cloneDescriptionWithSdp(desc, enhanceAudioSdp(desc?.sdp));
+          const result = originalSetRemoteDescription.call(this, patched);
           Promise.resolve(result).then(scheduleRecoveryPasses).catch(() => {});
           return result;
         };
       }
+
       PC.prototype.__micMaxPcPatched = true;
     }
 
@@ -736,7 +789,14 @@
       const originalReplaceTrack = Sender.prototype.replaceTrack;
       if (typeof originalReplaceTrack === 'function') {
         Sender.prototype.replaceTrack = function replaceTrack(track) {
-          const nextTrack = cfg().enabled && track?.kind === 'audio' ? processAudioTrack(track, true) : track;
+          const currentKind = this.track?.kind;
+          const shouldProcess = cfg().enabled && (track?.kind === 'audio' || (!track && currentKind === 'audio'));
+          if (shouldProcess && !track) {
+            const record = rememberSender(this, this.track || null);
+            if (record) record.kind = 'audio';
+            queueSenderRefresh(this, this.track || null);
+          }
+          const nextTrack = shouldProcess && track?.kind === 'audio' ? processAudioTrack(track, true) : track;
           const result = originalReplaceTrack.call(this, nextTrack);
           if (nextTrack?.kind === 'audio') {
             rememberSender(this, nextTrack);
@@ -800,6 +860,10 @@
     if (!document.hidden) scheduleRecoveryPasses();
   });
 
-  setInterval(() => { enforceAllSourceConstraints(); resumeAllPipelines(); reconcileLiveSenders(); }, cfg().senderRefreshMs);
+  setInterval(() => {
+    enforceAllSourceConstraints();
+    resumeAllPipelines();
+    reconcileLiveSenders();
+  }, cfg().senderRefreshMs);
   window.postMessage({ type: 'MIC_MAXIMIZER_READY' }, '*');
 })();
