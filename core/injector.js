@@ -30,7 +30,6 @@
     keepAlive: true,
     keepAliveGain: 0.0012,
     senderRefreshMs: 250
- 	hybridAEC: true
   };
   const MSG_CFG = 'MIC_MAXIMIZER_CONFIG';
   const AUDIO_SEND_MAX_BITRATE = 512000;
