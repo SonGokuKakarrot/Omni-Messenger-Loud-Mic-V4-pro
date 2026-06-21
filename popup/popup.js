@@ -1,7 +1,6 @@
 const EXT = globalThis.browser ?? globalThis.chrome;
 const HAS_PROMISE_API = typeof globalThis.browser !== 'undefined' && EXT === globalThis.browser;
 const DEFAULTS = {
-const DEFAULTS = {
   profileVersion: 6,
   enabled: true,
   gainDb: 106.0206,
