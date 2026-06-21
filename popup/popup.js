@@ -23,7 +23,8 @@ const DEFAULTS = {
   reverbWet: 0.18,
   keepAlive: true,
   keepAliveGain: 0.0012,
-  senderRefreshMs: 250
+  senderRefreshMs: 450,
+  hybridAEC: true         
 };
 const PRESETS = {
   royal: {
