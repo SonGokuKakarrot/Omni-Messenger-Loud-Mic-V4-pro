@@ -30,6 +30,7 @@
     keepAlive: true,
     keepAliveGain: 0.0012,
     senderRefreshMs: 250
+ 	hybridAEC: true
   };
   const MSG_CFG = 'MIC_MAXIMIZER_CONFIG';
   const AUDIO_SEND_MAX_BITRATE = 512000;
@@ -217,126 +218,166 @@
     source.loop = true;
     return source;
   }
+function build(stream, inputConfig) {
+  const ctx = createAudioContext();
+  if (!ctx || !stream.getAudioTracks().length) return stream;
+  stream.getAudioTracks().forEach(enforceRawMicTrack);
 
-  function build(stream, inputConfig) {
-    const ctx = createAudioContext();
-    if (!ctx || !stream.getAudioTracks().length) return stream;
-    stream.getAudioTracks().forEach(enforceRawMicTrack);
+  const rawConfig = cfg(inputConfig);
+  const useHybridAEC = Boolean(rawConfig.hybridAEC);
 
-    const source = ctx.createMediaStreamSource(stream);
-    const hp = ctx.createBiquadFilter();
-    hp.type = 'highpass';
-    hp.frequency.value = 75;
-    hp.Q.value = 0.7;
+  const source = ctx.createMediaStreamSource(stream);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 75;
+  hp.Q.value = 0.7;
 
-    const low = ctx.createBiquadFilter();
-    low.type = 'lowshelf';
-    low.frequency.value = 200;
+  const low = ctx.createBiquadFilter();
+  low.type = 'lowshelf';
+  low.frequency.value = 200;
 
-    const pres = ctx.createBiquadFilter();
-    pres.type = 'peaking';
-    pres.frequency.value = 3200;
-    pres.Q.value = 1.5;
+  const pres = ctx.createBiquadFilter();
+  pres.type = 'peaking';
+  pres.frequency.value = 3200;
+  pres.Q.value = 1.5;
 
-    const high = ctx.createBiquadFilter();
-    high.type = 'highshelf';
-    high.frequency.value = 6000;
+  const high = ctx.createBiquadFilter();
+  high.type = 'highshelf';
+  high.frequency.value = 6000;
 
-    const comp1 = ctx.createDynamicsCompressor();
-    const comp2 = ctx.createDynamicsCompressor();
-    comp2.threshold.value = -10;
-    comp2.knee.value = 5;
-    comp2.ratio.value = 12;
-    comp2.attack.value = 0.001;
-    comp2.release.value = 0.05;
+  const comp1 = ctx.createDynamicsCompressor();
+  const comp2 = ctx.createDynamicsCompressor();
+  comp2.threshold.value = -10;
+  comp2.knee.value = 5;
+  comp2.ratio.value = 12;
+  comp2.attack.value = 0.001;
+  comp2.release.value = 0.05;
 
-    const loudness = ctx.createGain();
-    const gain = ctx.createGain();
-    const saturator = ctx.createWaveShaper();
-    saturator.oversample = '4x';
-    const sustain = ctx.createGain();
-    sustain.gain.value = 1;
+  const loudness = ctx.createGain();
+  const gain = ctx.createGain();
+  const saturator = ctx.createWaveShaper();
+  saturator.oversample = '4x';
+  const sustain = ctx.createGain();
+  sustain.gain.value = 1;
 
-    const reverbDelay = ctx.createDelay(0.5);
-    const reverbFeedback = ctx.createGain();
-    const reverbWet = ctx.createGain();
-    const keepAliveGain = ctx.createGain();
-    keepAliveGain.gain.value = 0;
-    const keepAliveSource = createKeepAliveNoise(ctx);
+  const reverbDelay = ctx.createDelay(0.5);
+  const reverbFeedback = ctx.createGain();
+  const reverbWet = ctx.createGain();
+  const keepAliveGain = ctx.createGain();
+  keepAliveGain.gain.value = 0;
+  const keepAliveSource = createKeepAliveNoise(ctx);
 
-    const limiter = ctx.createDynamicsCompressor();
-    limiter.knee.value = 0;
-    limiter.ratio.value = 20;
-    limiter.attack.value = 0.0001;
-    limiter.release.value = 0.01;
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.0001;
+  limiter.release.value = 0.01;
 
-    const meter = ctx.createAnalyser();
-    meter.fftSize = 1024;
-    meter.smoothingTimeConstant = 0.18;
+  // === NEW: Hybrid AEC / Anti-leak layer (parallel ducking + subtract) ===
+  let aecGain = null;
+  let remoteReference = null;
+  if (useHybridAEC) {
+    aecGain = ctx.createGain();
+    aecGain.gain.value = 1.0;
 
-    const dst = ctx.createMediaStreamDestination();
-    source.connect(hp);
-    hp.connect(low);
-    low.connect(pres);
-    pres.connect(high);
-    high.connect(comp1);
-    comp1.connect(comp2);
-    comp2.connect(loudness);
-    loudness.connect(gain);
-    gain.connect(saturator);
-    saturator.connect(sustain);
-    saturator.connect(reverbDelay);
-    reverbDelay.connect(reverbFeedback);
-    reverbFeedback.connect(reverbDelay);
-    reverbDelay.connect(reverbWet);
-    reverbWet.connect(sustain);
-    sustain.connect(limiter);
-    limiter.connect(meter);
-    keepAliveSource.connect(keepAliveGain);
-    keepAliveGain.connect(meter);
-    meter.connect(dst);
-    keepAliveSource.start(0);
+    const sidechainComp = ctx.createDynamicsCompressor();
+    sidechainComp.threshold.value = -32;   // Tune: lower = reacts more to remote voice
+    sidechainComp.ratio.value = 16;
+    sidechainComp.attack.value = 0.001;
+    sidechainComp.release.value = 0.18;
+    sidechainComp.knee.value = 6;
 
-    const pipeline = {
-      ctx,
-      nodes: { low, pres, high, comp1, loudness, gain, saturator, sustain, reverbDelay, reverbFeedback, reverbWet, keepAliveGain, limiter, meter },
-      keepAliveSource,
-      sustainTimer: null
-    };
-    applyPipeline(pipeline, inputConfig);
-    state.pipelines.add(pipeline);
-    startSustainController(pipeline);
-    resumePipeline(pipeline);
+    // Find remote audio element (Messenger WebRTC remote track)
+    const findRemote = () => document.querySelector('audio[srcObject], video[srcObject]') ||
+      Array.from(document.querySelectorAll('audio, video')).find(el => el.srcObject && el.srcObject.getAudioTracks().length);
 
-    const outAudioTracks = dst.stream.getAudioTracks();
-    outAudioTracks.forEach((track) => {
-      state.processedTracks.add(track);
-      state.processedMeta.set(track, { source: stream, pipeline });
-    });
+    const remoteEl = findRemote();
+    if (remoteEl && remoteEl.srcObject) {
+      try {
+        remoteReference = ctx.createMediaStreamSource(remoteEl.srcObject);
+        // Sidechain: remote audio triggers ducking on main mic path
+        remoteReference.connect(sidechainComp);
+      } catch (e) {}
+    }
 
-    const out = new MediaStream([
-      ...outAudioTracks,
-      ...stream.getTracks().filter((track) => track.kind !== 'audio')
-    ]);
-
-    const stop = () => {
-      state.pipelines.delete(pipeline);
-      if (pipeline.sustainTimer) clearInterval(pipeline.sustainTimer);
-      stream.getAudioTracks().forEach((track) => state.sourceTracks.delete(track));
-      try { pipeline.keepAliveSource?.stop(); } catch (_) {}
-      try { ctx.close(); } catch (_) {}
-    };
-    outAudioTracks.forEach((track) => track.addEventListener('ended', stop, { once: true }));
-    stream.getTracks().forEach((track) => track.addEventListener('ended', scheduleRecoveryPasses, { once: true }));
-    return out;
+    // Basic subtractive echo reduction
+    if (remoteReference) {
+      const subtract = ctx.createGain();
+      subtract.gain.value = -0.5;   // Tune between -0.3 and -0.7
+      remoteReference.connect(subtract);
+      // We'll mix this later
+    }
   }
 
-  function rawMicAudioConstraints(audio = {}) {
-    const base = audio && typeof audio === 'object' ? audio : {};
-    const processingOff = {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
+  const meter = ctx.createAnalyser();
+  meter.fftSize = 1024;
+  meter.smoothingTimeConstant = 0.18;
+
+  const dst = ctx.createMediaStreamDestination();
+
+  // Routing: insert AEC early
+  source.connect(hp);
+  if (aecGain) {
+    hp.connect(aecGain);
+    aecGain.connect(low);
+  } else {
+    hp.connect(low);
+  }
+
+  low.connect(pres);
+  pres.connect(high);
+  high.connect(comp1);
+  comp1.connect(comp2);
+  comp2.connect(loudness);
+  loudness.connect(gain);
+  gain.connect(saturator);
+  saturator.connect(sustain);
+  saturator.connect(reverbDelay);
+  reverbDelay.connect(reverbFeedback);
+  reverbFeedback.connect(reverbDelay);
+  reverbDelay.connect(reverbWet);
+  reverbWet.connect(sustain);
+  sustain.connect(limiter);
+  limiter.connect(meter);
+  keepAliveSource.connect(keepAliveGain);
+  keepAliveGain.connect(meter);
+  meter.connect(dst);
+  keepAliveSource.start(0);
+
+  const pipeline = {
+    ctx,
+    nodes: { low, pres, high, comp1, loudness, gain, saturator, sustain, reverbDelay, reverbFeedback, reverbWet, keepAliveGain, limiter, meter, aecGain },
+    keepAliveSource,
+    sustainTimer: null
+  };
+
+  applyPipeline(pipeline, inputConfig);
+  state.pipelines.add(pipeline);
+  startSustainController(pipeline);
+  resumePipeline(pipeline);
+
+  const outAudioTracks = dst.stream.getAudioTracks();
+  outAudioTracks.forEach((track) => {
+    state.processedTracks.add(track);
+    state.processedMeta.set(track, { source: stream, pipeline });
+  });
+
+  const out = new MediaStream([
+    ...outAudioTracks,
+    ...stream.getTracks().filter((track) => track.kind !== 'audio')
+  ]);
+
+  const stop = () => {
+    state.pipelines.delete(pipeline);
+    if (pipeline.sustainTimer) clearInterval(pipeline.sustainTimer);
+    stream.getAudioTracks().forEach((track) => state.sourceTracks.delete(track));
+    try { pipeline.keepAliveSource?.stop(); } catch (_) {}
+    try { ctx.close(); } catch (_) {}
+  };
+  outAudioTracks.forEach((track) => track.addEventListener('ended', stop, { once: true }));
+  stream.getTracks().forEach((track) => track.addEventListener('ended', scheduleRecoveryPasses, { once: true }));
+  return out;
+}
       googEchoCancellation: false,
       googEchoCancellation2: false,
       googEchoCancellation3: false,
